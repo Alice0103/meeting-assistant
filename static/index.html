@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>会议语音助手</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f4;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: #fff;
+    border-bottom: 1px solid #e5e5e4;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  #status {
+    font-size: 13px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: #e7e5e4;
+    color: #57534e;
+  }
+  #status.transcribing { background: #dbeafe; color: #1d4ed8; }
+  #status.thinking { background: #fef3c7; color: #b45309; }
+  #status.listening { background: #dcfce7; color: #15803d; }
+  #status.offline { background: #fee2e2; color: #b91c1c; }
+  main {
+    flex: 1;
+    display: flex;
+    gap: 1px;
+    background: #e5e5e4;
+    overflow: hidden;
+  }
+  .panel {
+    flex: 1;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .panel h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #44403c;
+    padding: 10px 16px;
+    border-bottom: 1px solid #f0efee;
+  }
+  .scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  #transcript .seg {
+    margin-bottom: 14px;
+    line-height: 1.65;
+    font-size: 16px;
+    color: #1c1917;
+  }
+  #transcript .seg .time {
+    display: block;
+    font-size: 11px;
+    color: #a8a29e;
+    margin-bottom: 2px;
+  }
+  #transcript .seg.interim {
+    color: #a8a29e;
+  }
+  #answers .card {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    border: 1px solid #e7e5e4;
+    border-radius: 10px;
+    background: #fafaf9;
+    line-height: 1.7;
+    font-size: 16px;
+    color: #1c1917;
+    white-space: pre-wrap;
+  }
+  #answers .card.done { border-left: 3px solid #16a34a; }
+  #answers .card.failed { border-left: 3px solid #dc2626; }
+  .empty {
+    color: #a8a29e;
+    font-size: 14px;
+    text-align: center;
+    margin-top: 40px;
+  }
+  footer {
+    padding: 6px 20px;
+    font-size: 12px;
+    color: #a8a29e;
+    background: #fff;
+    border-top: 1px solid #e5e5e4;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>会议语音助手</h1>
+  <span id="status">连接中…</span>
+</header>
+<main>
+  <div class="panel">
+    <h2>实时转写</h2>
+    <div class="scroll" id="transcript"></div>
+  </div>
+  <div class="panel">
+    <h2>AI 回答</h2>
+    <div class="scroll" id="answers"></div>
+  </div>
+</main>
+<footer>采集系统音频 → 本地转写 → AI 回答</footer>
+<script>
+(() => {
+  const statusEl = document.getElementById("status");
+  const transcriptEl = document.getElementById("transcript");
+  const answersEl = document.getElementById("answers");
+  const seen = new Set();
+  let currentCard = null;
+  let currentCardText = "";
+  let interimEl = null;
+
+  const setStatus = (state) => {
+    statusEl.textContent = {
+      transcribing: "转写中…", thinking: "AI 思考中…",
+      listening: "监听中", offline: "连接断开",
+    }[state] || state;
+    statusEl.className = state;
+  };
+
+  const nearBottom = (el) =>
+    el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+
+  const clearInterim = () => {
+    if (interimEl) {
+      interimEl.remove();
+      interimEl = null;
+    }
+  };
+
+  const addTranscript = (text) => {
+    const wrap = document.createElement("div");
+    wrap.className = "seg";
+    const time = document.createElement("span");
+    time.className = "time";
+    time.textContent = new Date().toLocaleTimeString("zh-CN");
+    wrap.appendChild(time);
+    wrap.appendChild(document.createTextNode(text));
+    const stick = nearBottom(transcriptEl);
+    transcriptEl.appendChild(wrap);
+    while (transcriptEl.children.length > 300) {
+      transcriptEl.removeChild(transcriptEl.firstChild);
+    }
+    if (stick) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  };
+
+  const newCard = () => {
+    currentCard = document.createElement("div");
+    currentCard.className = "card";
+    currentCardText = "";
+    answersEl.appendChild(currentCard);
+    answersEl.scrollTop = answersEl.scrollHeight;
+  };
+
+  const handle = (ev) => {
+    if (seen.has(ev.seq)) return;
+    seen.add(ev.seq);
+    switch (ev.type) {
+      case "status":
+        setStatus(ev.state);
+        break;
+      case "interim":
+        if (!interimEl) {
+          interimEl = document.createElement("div");
+          interimEl.className = "seg interim";
+          transcriptEl.appendChild(interimEl);
+        }
+        interimEl.textContent = ev.text + "…";
+        if (nearBottom(transcriptEl)) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        break;
+      case "transcript":
+        clearInterim();
+        addTranscript(ev.text);
+        break;
+      case "answer_start":
+        newCard();
+        break;
+      case "answer_delta":
+        if (!currentCard) newCard();
+        currentCardText += ev.text;
+        currentCard.textContent = currentCardText;
+        answersEl.scrollTop = answersEl.scrollHeight;
+        break;
+      case "answer_done":
+        if (currentCard) {
+          currentCard.classList.add(
+            currentCardText.includes("[回答中断") ? "failed" : "done");
+          currentCard = null;
+        }
+        break;
+    }
+  };
+
+  const connect = () => {
+    const es = new EventSource("/api/events");
+    es.onmessage = (e) => handle(JSON.parse(e.data));
+    es.onopen = () => setStatus("listening");
+    es.onerror = () => {
+      setStatus("offline");
+      es.close();
+      setTimeout(connect, 2000);
+    };
+  };
+  connect();
+})();
+</script>
+</body>
+</html>
